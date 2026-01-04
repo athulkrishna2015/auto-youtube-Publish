@@ -85,8 +85,10 @@
   const VISIBILITY_PAPER_BUTTONS_SELECTOR = 'tp-yt-paper-radio-group'
   const SAVE_BUTTON_SELECTOR = '#done-button'
   const SUCCESS_ELEMENT_SELECTOR = 'ytcp-video-thumbnail-with-info'
-  const DIALOG_SELECTOR = 'ytcp-dialog.ytcp-video-share-dialog > tp-yt-paper-dialog:nth-child(1)'
-  const DIALOG_CLOSE_BUTTON_SELECTOR = 'tp-yt-iron-icon'
+  const DIALOG_SELECTOR = 'ytcp-video-share-dialog' // Made slightly more robust
+  
+  // *** FIXED SELECTOR BELOW ***
+  const DIALOG_CLOSE_BUTTON_SELECTOR = '#close-button' 
 
   class SuccessDialog {
     constructor (raw) {
@@ -98,9 +100,17 @@
     }
 
     async close () {
-      click(await this.closeDialogButton())
-      await sleep(50)
-      debugLog('closed')
+      const btn = await this.closeDialogButton()
+      if (btn) {
+          click(btn)
+          await sleep(500) // Added slightly more sleep to ensure UI updates
+          debugLog('closed')
+      } else {
+          debugLog('Could not find close button, attempting global close')
+          // Fallback: try finding the button in the main document if context is lost
+          const globalBtn = document.querySelector(DIALOG_CLOSE_BUTTON_SELECTOR);
+          if(globalBtn) click(globalBtn);
+      }
     }
   }
 
@@ -164,7 +174,7 @@
     async selectMadeForKids () {
       click(await this.madeForKidsPaperButton())
       await sleep(50)
-      debugLog('"Made for kids" set as ${MADE_FOR_KIDS}')
+      debugLog(`"Made for kids" set as ${MADE_FOR_KIDS}`)
     }
 
     async visibilityStepper () {
