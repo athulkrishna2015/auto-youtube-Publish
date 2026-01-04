@@ -1,81 +1,57 @@
 (() => {
   // -----------------------------------------------------------------
-  // CONFIG (you're safe to edit this)
+  // CONFIG
   // -----------------------------------------------------------------
-  // ~ GLOBAL CONFIG
-  // -----------------------------------------------------------------
-  const MODE = 'publish_drafts' // 'publish_drafts' / 'sort_playlist';
-  const DEBUG_MODE = true // true / false, enable for more context
-  // -----------------------------------------------------------------
-  // ~ PUBLISH CONFIG
-  // -----------------------------------------------------------------
-  const MADE_FOR_KIDS = false // true / false;
-  const VISIBILITY = 'Unlisted' // 'Public' / 'Private' / 'Unlisted'
-  // -----------------------------------------------------------------
-  // ~ SORT PLAYLIST CONFIG
-  // -----------------------------------------------------------------
-  const SORTING_KEY = (one, other) => {
-    const numberRegex = /\d+/
-    const number = (name) => name.match(numberRegex)[0]
-    if (number(one.name) === undefined || number(other.name) === undefined) {
-      return one.name.localeCompare(other.name)
-    }
-    return number(one.name) - number(other.name)
-  }
-  // END OF CONFIG (not safe to edit stuff below)
-  // -----------------------------------------------------------------
+  const MODE = 'publish_drafts' 
+  const DEBUG_MODE = true 
+  const MADE_FOR_KIDS = false 
+  const VISIBILITY = 'Unlisted' // <--- CHANGED TO UNLISTED
 
-  // COMMON  STUFF
-  // ---------------------------------
-  const TIMEOUT_STEP_MS = 20
-  const DEFAULT_ELEMENT_TIMEOUT_MS = 10000
+  // -----------------------------------------------------------------
+  // INTERNAL UTILS
+  // -----------------------------------------------------------------
+  const TIMEOUT_STEP_MS = 100
+  const DEFAULT_ELEMENT_TIMEOUT_MS = 15000 
+
   function debugLog (...args) {
-    if (!DEBUG_MODE) {
-      return
-    }
-    console.debug(...args)
+    if (DEBUG_MODE) console.debug(...args)
   }
-  const sleep = (ms) => new Promise((resolve, _) => setTimeout(resolve, ms))
+  
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
   async function waitForElement (selector, baseEl, timeoutMs) {
-    if (timeoutMs === undefined) {
-      timeoutMs = DEFAULT_ELEMENT_TIMEOUT_MS
-    }
-    if (baseEl === undefined) {
-      baseEl = document
-    }
+    if (timeoutMs === undefined) timeoutMs = DEFAULT_ELEMENT_TIMEOUT_MS
+    if (!baseEl) baseEl = document 
+    
     let timeout = timeoutMs
     while (timeout > 0) {
       const element = baseEl.querySelector(selector)
-      if (element !== null) {
-        return element
-      }
+      if (element !== null) return element
       await sleep(TIMEOUT_STEP_MS)
       timeout -= TIMEOUT_STEP_MS
     }
-    debugLog(`could not find ${selector} inside`, baseEl)
+    debugLog(`[Warning] could not find ${selector}`)
     return null
   }
 
   function click (element) {
+    if (!element) {
+        debugLog('Cannot click null element')
+        return
+    }
     const event = document.createEvent('MouseEvents')
     event.initMouseEvent('mousedown', true, false, window, 0, 0, 0, 0, 0, false, false, false, false, 0, null)
     element.dispatchEvent(event)
     element.click()
-    debugLog(element, 'clicked')
+    debugLog('Clicked element:', element)
   }
 
   // ----------------------------------
-  // PUBLISH STUFF
+  // PUBLISH LOGIC
   // ----------------------------------
-  const VISIBILITY_PUBLISH_ORDER = {
-    Private: 0,
-    Unlisted: 1,
-    Public: 2
-  }
+  const VISIBILITY_PUBLISH_ORDER = { Private: 0, Unlisted: 1, Public: 2 }
 
   // SELECTORS
-  // ---------
   const VIDEO_ROW_SELECTOR = 'ytcp-video-row'
   const DRAFT_MODAL_SELECTOR = '.style-scope.ytcp-uploads-dialog'
   const DRAFT_BUTTON_SELECTOR = '.edit-draft-button'
@@ -85,31 +61,31 @@
   const VISIBILITY_PAPER_BUTTONS_SELECTOR = 'tp-yt-paper-radio-group'
   const SAVE_BUTTON_SELECTOR = '#done-button'
   const SUCCESS_ELEMENT_SELECTOR = 'ytcp-video-thumbnail-with-info'
-  const DIALOG_SELECTOR = 'ytcp-video-share-dialog' // Made slightly more robust
   
-  // *** FIXED SELECTOR BELOW ***
-  const DIALOG_CLOSE_BUTTON_SELECTOR = '#close-button' 
+  const DIALOG_SELECTOR = 'ytcp-video-share-dialog'
+  const DIALOG_CLOSE_BUTTON_SELECTOR = '#close-button'
 
   class SuccessDialog {
     constructor (raw) {
       this.raw = raw
     }
 
-    async closeDialogButton () {
-      return await waitForElement(DIALOG_CLOSE_BUTTON_SELECTOR, this.raw)
-    }
-
     async close () {
-      const btn = await this.closeDialogButton()
+      // 1. Try finding button inside the dialog container
+      let btn = await waitForElement(DIALOG_CLOSE_BUTTON_SELECTOR, this.raw, 2000)
+      
+      // 2. Fallback: Search globally if context failed
+      if (!btn) {
+          debugLog('Close button not found in context, searching globally...')
+          btn = document.querySelector('ytcp-video-share-dialog #close-button') || 
+                document.querySelector('#close-button[label="Close"]')
+      }
+
       if (btn) {
           click(btn)
-          await sleep(500) // Added slightly more sleep to ensure UI updates
-          debugLog('closed')
+          await sleep(1000) 
       } else {
-          debugLog('Could not find close button, attempting global close')
-          // Fallback: try finding the button in the main document if context is lost
-          const globalBtn = document.querySelector(DIALOG_CLOSE_BUTTON_SELECTOR);
-          if(globalBtn) click(globalBtn);
+          debugLog('CRITICAL: Could not find any close button. Script may get stuck.')
       }
     }
   }
@@ -119,41 +95,24 @@
       this.raw = raw
     }
 
-    async radioButtonGroup () {
-      return await waitForElement(VISIBILITY_PAPER_BUTTONS_SELECTOR, this.raw)
-    }
-
-    async visibilityRadioButton () {
-      const group = await this.radioButtonGroup()
-      const value = VISIBILITY_PUBLISH_ORDER[VISIBILITY]
-      return [...group.querySelectorAll(RADIO_BUTTON_SELECTOR)][value]
-    }
-
     async setVisibility () {
-      click(await this.visibilityRadioButton())
-      debugLog(`visibility set to ${VISIBILITY}`)
-      await sleep(50)
-    }
-
-    async saveButton () {
-      return await waitForElement(SAVE_BUTTON_SELECTOR, this.raw)
-    }
-
-    async isSaved () {
-      await waitForElement(SUCCESS_ELEMENT_SELECTOR, document)
-    }
-
-    async dialog () {
-      return await waitForElement(DIALOG_SELECTOR)
+      const group = await waitForElement(VISIBILITY_PAPER_BUTTONS_SELECTOR, this.raw)
+      const value = VISIBILITY_PUBLISH_ORDER[VISIBILITY]
+      const radioBtn = [...group.querySelectorAll(RADIO_BUTTON_SELECTOR)][value]
+      click(radioBtn)
+      await sleep(100)
     }
 
     async save () {
-      click(await this.saveButton())
-      await this.isSaved()
-      debugLog('saved')
-      const dialogElement = await this.dialog()
-      const success = new SuccessDialog(dialogElement)
-      return success
+      const saveBtn = await waitForElement(SAVE_BUTTON_SELECTOR, this.raw)
+      click(saveBtn)
+      
+      debugLog('Waiting for save completion...')
+      await waitForElement(SUCCESS_ELEMENT_SELECTOR, document, 20000)
+      debugLog('Save completed.')
+
+      const dialogElement = await waitForElement(DIALOG_SELECTOR, document, 5000)
+      return new SuccessDialog(dialogElement)
     }
   }
 
@@ -162,33 +121,18 @@
       this.raw = raw
     }
 
-    async madeForKidsToggle () {
-      return await waitForElement(MADE_FOR_KIDS_SELECTOR, this.raw)
-    }
-
-    async madeForKidsPaperButton () {
-      const nthChild = MADE_FOR_KIDS ? 1 : 2
-      return await waitForElement(`${RADIO_BUTTON_SELECTOR}:nth-child(${nthChild})`, this.raw)
-    }
-
     async selectMadeForKids () {
-      click(await this.madeForKidsPaperButton())
-      await sleep(50)
-      debugLog(`"Made for kids" set as ${MADE_FOR_KIDS}`)
-    }
-
-    async visibilityStepper () {
-      return await waitForElement(VISIBILITY_STEPPER_SELECTOR, this.raw)
+      const nthChild = MADE_FOR_KIDS ? 1 : 2
+      const radioButton = await waitForElement(`${RADIO_BUTTON_SELECTOR}:nth-child(${nthChild})`, this.raw)
+      click(radioButton)
+      await sleep(100)
     }
 
     async goToVisibility () {
-      debugLog('going to Visibility')
-      await sleep(50)
-      click(await this.visibilityStepper())
-      const visibility = new VisibilityModal(this.raw)
-      await sleep(50)
-      await waitForElement(VISIBILITY_PAPER_BUTTONS_SELECTOR, visibility.raw)
-      return visibility
+      const stepper = await waitForElement(VISIBILITY_STEPPER_SELECTOR, this.raw)
+      click(stepper)
+      await sleep(500) 
+      return new VisibilityModal(this.raw)
     }
   }
 
@@ -198,130 +142,42 @@
     }
 
     get editDraftButton () {
-      return waitForElement(DRAFT_BUTTON_SELECTOR, this.raw, 20)
+      return this.raw.querySelector(DRAFT_BUTTON_SELECTOR)
     }
 
     async openDraft () {
-      debugLog('focusing draft button')
-      click(await this.editDraftButton)
-      return new DraftModal(await waitForElement(DRAFT_MODAL_SELECTOR))
+      click(this.editDraftButton)
+      const modal = await waitForElement(DRAFT_MODAL_SELECTOR)
+      return new DraftModal(modal)
     }
-  }
-
-  function allVideos () {
-    return [...document.querySelectorAll(VIDEO_ROW_SELECTOR)].map((el) => new VideoRow(el))
-  }
-
-  async function editableVideos () {
-    let editable = []
-    for (const video of allVideos()) {
-      if ((await video.editDraftButton) !== null) {
-        editable = [...editable, video]
-      }
-    }
-    return editable
   }
 
   async function publishDrafts () {
-    const videos = await editableVideos()
-    debugLog(`found ${videos.length} videos`)
-    debugLog('starting in 1000ms')
-    await sleep(1000)
-    for (const video of videos) {
+    const rows = [...document.querySelectorAll(VIDEO_ROW_SELECTOR)]
+    const editable = rows.filter(row => row.querySelector(DRAFT_BUTTON_SELECTOR))
+
+    debugLog(`Found ${editable.length} draft videos.`)
+    
+    for (const rowEl of editable) {
+      const video = new VideoRow(rowEl)
+      debugLog('Processing video...')
+      
       const draft = await video.openDraft()
-      debugLog({
-        draft
-      })
       await draft.selectMadeForKids()
       const visibility = await draft.goToVisibility()
       await visibility.setVisibility()
-      const dialog = await visibility.save()
-      await dialog.close()
-      await sleep(100)
+      
+      const successDialog = await visibility.save()
+      await successDialog.close()
+      
+      debugLog('Video processed. Waiting 2s before next...')
+      await sleep(2000)
     }
+    debugLog('All Done!')
   }
 
-  // ----------------------------------
-  // SORTING STUFF
-  // ----------------------------------
-  const SORTING_MENU_BUTTON_SELECTOR = 'button'
-  const SORTING_ITEM_MENU_SELECTOR = 'paper-listbox#items'
-  const SORTING_ITEM_MENU_ITEM_SELECTOR = 'ytd-menu-service-item-renderer'
-  const MOVE_TO_TOP_INDEX = 4
-  const MOVE_TO_BOTTOM_INDEX = 5
-
-  class SortingDialog {
-    constructor (raw) {
-      this.raw = raw
-    }
-
-    async anyMenuItem () {
-      const item = await waitForElement(SORTING_ITEM_MENU_ITEM_SELECTOR, this.raw)
-      if (item === null) {
-        throw new Error('could not locate any menu item')
-      }
-      return item
-    }
-
-    menuItems () {
-      return [...this.raw.querySelectorAll(SORTING_ITEM_MENU_ITEM_SELECTOR)]
-    }
-
-    async moveToTop () {
-      click(this.menuItems()[MOVE_TO_TOP_INDEX])
-    }
-
-    async moveToBottom () {
-      click(this.menuItems()[MOVE_TO_BOTTOM_INDEX])
-    }
-  }
-  class PlaylistVideo {
-    constructor (raw) {
-      this.raw = raw
-    }
-
-    get name () {
-      return this.raw.querySelector('#video-title').textContent
-    }
-
-    async dialog () {
-      return this.raw.querySelector(SORTING_MENU_BUTTON_SELECTOR)
-    }
-
-    async openDialog () {
-      click(await this.dialog())
-      const dialog = new SortingDialog(await waitForElement(SORTING_ITEM_MENU_SELECTOR))
-      await dialog.anyMenuItem()
-      return dialog
-    }
-  }
-  async function playlistVideos () {
-    return [...document.querySelectorAll('ytd-playlist-video-renderer')]
-      .map((el) => new PlaylistVideo(el))
-  }
-  async function sortPlaylist () {
-    debugLog('sorting playlist')
-    const videos = await playlistVideos()
-    debugLog(`found ${videos.length} videos`)
-    videos.sort(SORTING_KEY)
-    const videoNames = videos.map((v) => v.name)
-
-    let index = 1
-    for (const name of videoNames) {
-      debugLog({ index, name })
-      const video = videos.find((v) => v.name === name)
-      const dialog = await video.openDialog()
-      await dialog.moveToBottom()
-      await sleep(1000)
-      index += 1
-    }
-  }
-
-  // ----------------------------------
   // ENTRY POINT
-  // ----------------------------------
-  ({
-    publish_drafts: publishDrafts,
-    sort_playlist: sortPlaylist
-  })[MODE]()
+  if (MODE === 'publish_drafts') {
+      publishDrafts()
+  }
 })()
