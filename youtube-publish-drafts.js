@@ -5,13 +5,13 @@
   const MODE = 'publish_drafts' 
   const DEBUG_MODE = true 
   const MADE_FOR_KIDS = false 
-  const VISIBILITY = 'Unlisted' // <--- CHANGED TO UNLISTED
+  const VISIBILITY = 'Unlisted' // Defaults to Unlisted
 
   // -----------------------------------------------------------------
   // INTERNAL UTILS
   // -----------------------------------------------------------------
-  const TIMEOUT_STEP_MS = 100
-  const DEFAULT_ELEMENT_TIMEOUT_MS = 15000 
+  const TIMEOUT_STEP_MS = 500 
+  const DEFAULT_ELEMENT_TIMEOUT_MS = 20000 
 
   function debugLog (...args) {
     if (DEBUG_MODE) console.debug(...args)
@@ -19,12 +19,27 @@
   
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
+  // *** NEW: NETWORK CHECKER ***
+  async function waitUntilOnline() {
+    if (navigator.onLine) return;
+    
+    debugLog('⚠️ Network Disconnected! Pausing script...');
+    while (!navigator.onLine) {
+      await sleep(2000);
+    }
+    debugLog('✅ Network Restored! Resuming in 3 seconds...');
+    await sleep(3000); // Give YouTube a moment to reconnect internally
+  }
+
   async function waitForElement (selector, baseEl, timeoutMs) {
     if (timeoutMs === undefined) timeoutMs = DEFAULT_ELEMENT_TIMEOUT_MS
     if (!baseEl) baseEl = document 
     
     let timeout = timeoutMs
     while (timeout > 0) {
+      // Pause if offline during wait
+      await waitUntilOnline();
+
       const element = baseEl.querySelector(selector)
       if (element !== null) return element
       await sleep(TIMEOUT_STEP_MS)
@@ -71,10 +86,11 @@
     }
 
     async close () {
-      // 1. Try finding button inside the dialog container
-      let btn = await waitForElement(DIALOG_CLOSE_BUTTON_SELECTOR, this.raw, 2000)
+      await sleep(1500)
+      await waitUntilOnline(); // Ensure online before closing
+
+      let btn = await waitForElement(DIALOG_CLOSE_BUTTON_SELECTOR, this.raw, 3000)
       
-      // 2. Fallback: Search globally if context failed
       if (!btn) {
           debugLog('Close button not found in context, searching globally...')
           btn = document.querySelector('ytcp-video-share-dialog #close-button') || 
@@ -96,21 +112,45 @@
     }
 
     async setVisibility () {
+      await waitUntilOnline();
       const group = await waitForElement(VISIBILITY_PAPER_BUTTONS_SELECTOR, this.raw)
       const value = VISIBILITY_PUBLISH_ORDER[VISIBILITY]
       const radioBtn = [...group.querySelectorAll(RADIO_BUTTON_SELECTOR)][value]
+      
+      await sleep(1000)
       click(radioBtn)
-      await sleep(100)
+      await sleep(1000)
     }
 
     async save () {
-      const saveBtn = await waitForElement(SAVE_BUTTON_SELECTOR, this.raw)
-      click(saveBtn)
-      
-      debugLog('Waiting for save completion...')
-      await waitForElement(SUCCESS_ELEMENT_SELECTOR, document, 20000)
-      debugLog('Save completed.')
+      // *** RETRY LOOP FOR SAVING ***
+      let success = null;
+      let attempts = 0;
 
+      while (!success && attempts < 5) {
+        attempts++;
+        await waitUntilOnline(); // Ensure online before clicking save
+        
+        const saveBtn = await waitForElement(SAVE_BUTTON_SELECTOR, this.raw)
+        
+        if (attempts > 1) debugLog(`Retry attempt ${attempts} for saving...`);
+        click(saveBtn)
+        
+        debugLog('Waiting for save completion...');
+        // Wait 15s for the success screen. If it fails (due to network), loop repeats.
+        success = await waitForElement(SUCCESS_ELEMENT_SELECTOR, document, 15000)
+        
+        if (!success) {
+            debugLog('Save timed out (possible network error). Retrying...');
+            await sleep(2000); // Wait a bit before retrying
+        }
+      }
+
+      if (!success) {
+          throw new Error("Failed to save video after 5 attempts.");
+      }
+
+      debugLog('Save completed.')
       const dialogElement = await waitForElement(DIALOG_SELECTOR, document, 5000)
       return new SuccessDialog(dialogElement)
     }
@@ -122,16 +162,20 @@
     }
 
     async selectMadeForKids () {
+      await waitUntilOnline();
       const nthChild = MADE_FOR_KIDS ? 1 : 2
       const radioButton = await waitForElement(`${RADIO_BUTTON_SELECTOR}:nth-child(${nthChild})`, this.raw)
+      
+      await sleep(1000)
       click(radioButton)
-      await sleep(100)
+      await sleep(1000)
     }
 
     async goToVisibility () {
+      await waitUntilOnline();
       const stepper = await waitForElement(VISIBILITY_STEPPER_SELECTOR, this.raw)
       click(stepper)
-      await sleep(500) 
+      await sleep(2000) 
       return new VisibilityModal(this.raw)
     }
   }
@@ -146,8 +190,10 @@
     }
 
     async openDraft () {
+      await waitUntilOnline();
       click(this.editDraftButton)
       const modal = await waitForElement(DRAFT_MODAL_SELECTOR)
+      await sleep(1500) 
       return new DraftModal(modal)
     }
   }
@@ -157,21 +203,27 @@
     const editable = rows.filter(row => row.querySelector(DRAFT_BUTTON_SELECTOR))
 
     debugLog(`Found ${editable.length} draft videos.`)
+    debugLog('Starting Network-Aware Execution...')
     
     for (const rowEl of editable) {
       const video = new VideoRow(rowEl)
       debugLog('Processing video...')
       
-      const draft = await video.openDraft()
-      await draft.selectMadeForKids()
-      const visibility = await draft.goToVisibility()
-      await visibility.setVisibility()
-      
-      const successDialog = await visibility.save()
-      await successDialog.close()
-      
-      debugLog('Video processed. Waiting 2s before next...')
-      await sleep(2000)
+      try {
+        const draft = await video.openDraft()
+        await draft.selectMadeForKids()
+        const visibility = await draft.goToVisibility()
+        await visibility.setVisibility()
+        
+        const successDialog = await visibility.save()
+        await successDialog.close()
+        
+        debugLog('Video processed. Waiting 5s before next...')
+        await sleep(5000)
+      } catch (e) {
+        console.error("Error processing video:", e);
+        debugLog("Skipping video due to error and moving to next...");
+      }
     }
     debugLog('All Done!')
   }
